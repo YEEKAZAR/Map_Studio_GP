@@ -1,0 +1,1453 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Map Studio v9.10 - Export Security Fix</title>
+<!-- เพิ่ม crossorigin="anonymous" เพื่อให้ html-to-image สามารถอ่าน cssRules ได้ -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" crossorigin="anonymous"/>
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@300;400;600&family=Sarabun:wght@400;700&display=swap" rel="stylesheet" crossorigin="anonymous">
+
+<!-- ใช้ html-to-image เป็นเอนจินหลักตัวเดียวในการ Export เพื่อแก้ปัญหา FX หาย -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js"></script>
+<!-- Library for Map Math (Turf.js) -->
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
+
+<style id="dynamic-fx"></style>
+
+<style>
+/* ── RESET & BASE ── */
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Sarabun',sans-serif;display:flex;height:100vh;overflow:hidden;background:#0d1117;color:#c9d1d9;}
+
+/* ── SIDEBAR ── */
+#sidebar{
+  width:320px;min-width:320px;background:#0d1117;
+  display:flex;flex-direction:column;gap:4px;padding:12px;
+  overflow-y:auto;border-right:1px solid #30363d;z-index:2000;
+  box-shadow:5px 0 15px rgba(0,0,0,0.5);
+}
+#sidebar::-webkit-scrollbar{width:4px;}
+#sidebar::-webkit-scrollbar-thumb{background:#30363d;border-radius:10px;}
+
+/* ── MAP ── */
+#map-container{flex:1;position:relative;background:#161b22;overflow:hidden;}
+#map{width:100%;height:100%;}
+
+/* ── UI COMPONENTS ── */
+.app-title{
+  font-size:1.1rem;font-weight:700;margin-bottom:12px;text-align:center;
+  background:linear-gradient(90deg, #58a6ff, #bc8cff);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+}
+
+.panel{background:#161b22;border:1px solid #30363d;border-radius:8px;margin-bottom:8px;overflow:hidden;}
+.panel-header{padding:10px 12px;cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none;transition:0.2s;}
+.panel-header:hover{background:#21262d;}
+.panel-header .ph-title{font-size:0.75rem;font-weight:700;text-transform:uppercase;color:#8b949e;flex:1;}
+.panel-header .ph-chevron{font-size:0.6rem;transition:0.3s;}
+.panel-header.open .ph-chevron{transform:rotate(180deg);}
+.panel-body{padding:12px;border-top:1px solid #30363d;display:none;}
+.panel-body.open{display:block;}
+
+/* ── FORM ELEMENTS ── */
+label{font-size:0.7rem;color:#8b949e;display:block;margin:8px 0 4px;}
+input[type=text], select{
+  width:100%;padding:8px;background:#0d1117;border:1px solid #30363d;
+  color:#c9d1d9;border-radius:6px;font-size:0.8rem;outline:none;
+}
+input[type=color]{width:40px;height:30px;border:none;background:none;cursor:pointer;vertical-align: middle;}
+button{
+  padding:8px 12px;border:none;border-radius:6px;cursor:pointer;
+  font-weight:600;font-size:0.8rem;transition:0.2s;width:100%;
+}
+.btn-primary{background:#238636;color:#fff;}
+.btn-outline{background:transparent;border:1px solid #30363d;color:#c9d1d9;}
+.btn-outline:hover{background:#21262d;}
+.btn-danger{background:#da3633;color:#fff;}
+
+.row{display:flex;gap:8px;align-items:center;}
+.flex-1{flex:1;}
+
+/* ── COLOR PRESETS ── */
+.color-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; margin-top: 6px; }
+.color-swatch { height: 24px; border-radius: 4px; cursor: pointer; border: 1px solid rgba(255,255,255,0.1); }
+.color-swatch:hover { transform: scale(1.1); border-color: #fff; }
+
+/* ── SHAPE SELECTOR UI ── */
+.shape-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 8px; }
+.shape-btn {
+  background: #111827; border: 1px solid #1f2937; border-radius: 6px; padding: 12px 5px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  cursor: pointer; transition: 0.2s; color: #c9d1d9; height: 50px;
+}
+.shape-btn:hover { background: #1f2937; border-color: #58a6ff; }
+.shape-btn.sel { background: #1f6feb; border-color: #58a6ff; color: #fff; }
+.shape-btn svg { width: 22px; height: 22px; pointer-events: none; }
+
+/* ── LABELS ── */
+.area-lbl {
+  font-family: 'Noto Sans Thai', sans-serif;
+  font-weight: 600; text-align: center; pointer-events: auto; white-space: nowrap;
+  text-shadow: 0 1px 4px rgba(0,0,0,1); cursor: move;
+}
+
+.ann-lbl {
+  font-family: 'Noto Sans Thai', sans-serif;
+  font-weight: 700; padding: 4px 10px; border-radius: 6px; white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3); cursor: move; transition: outline 0.1s;
+}
+.ann-lbl.selected { outline: 2px solid #58a6ff; outline-offset: 2px; }
+
+/* ── CROP BOX ── */
+#crop-box{
+  position:absolute;top:50%;left:50%;width:480px;height:270px;
+  transform:translate(-50%,-50%);z-index:1600;display:none;
+  outline:2px dashed #f85149;box-shadow:0 0 0 9999px rgba(0,0,0,0.6);
+}
+#crop-hdr{
+  background:rgba(218,54,51,0.9);color:#fff;font-size:0.65rem;
+  padding:4px;text-align:center;cursor:move;user-select:none;
+}
+#crop-dims{
+  position:absolute;bottom:-20px;left:50%;transform:translateX(-50%);
+  font-size:0.6rem;color:#f85149;white-space:nowrap;background: rgba(13,17,23,0.8); padding: 2px 6px; border-radius: 4px;
+}
+.rh{position:absolute;width:12px;height:12px;background:#fff;border:2px solid #da3633;border-radius:2px;}
+.rh-br{bottom:-6px;right:-6px;cursor:se-resize;}
+.rh-tr{top:-6px;right:-6px;cursor:ne-resize;}
+.rh-bl{bottom:-6px;left:-6px;cursor:sw-resize;}
+.rh-tl{top:-6px;left:-6px;cursor:nw-resize;}
+
+.toggle-row { display: flex; align-items: center; gap: 10px; margin-top: 5px; cursor: pointer; user-select: none; }
+.toggle-row input { width: 14px; height: 14px; cursor: pointer; accent-color: #1f6feb; }
+.sub-label { font-size: 0.65rem; color: #8b949e; font-weight: bold; text-transform: uppercase; margin-top: 10px; border-top: 1px solid #30363d; padding-top: 8px;}
+.help-footer { background: #070c14; border-radius: 6px; padding: 8px; margin-top: 10px; display: flex; align-items: center; gap: 8px; font-size: 0.65rem; color: #8b949e; border: 1px solid #1c2333;}
+.help-num { background: #1f6feb; color: #fff; width: 14px; height: 14px; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+
+/* FX Toggle */
+.fx-item { background: rgba(0,0,0,0.2); padding: 8px; border-radius: 6px; margin-bottom: 6px; border: 1px solid #30363d; }
+.fx-item-header { display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+.fx-item-header span { font-size: 0.75rem; font-weight: 600; color: #e2e8f0; }
+.fx-body { margin-top: 8px; display: none; }
+.fx-body.open { display: block; }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <div class="app-title">🗺️ Map Studio GP-1</div>
+
+  <div class="row" style="margin-bottom:10px;">
+    <button class="btn-outline flex-1" onclick="undoAction()">↩️ Undo</button>
+    <button class="btn-outline flex-1" onclick="resetAll()">🗑️ ล้างทั้งหมด</button>
+  </div>
+
+  <div style="flex:1; overflow-y:auto; padding-right:4px;">
+    
+    <!-- 1. MAIN FILES & LABELS PANEL -->
+    <div class="panel" id="files-panel">
+      <div class="panel-header" onclick="togglePanel(this)">
+        <span class="ph-title">📂 แผนที่ & ไฟล์หลัก</span>
+        <span class="ph-chevron">▼</span>
+      </div>
+      <div class="panel-body">
+        <label>รูปแบบแผนที่</label>
+        <select id="tileProvider" onchange="changeTile()">
+            <option value="osm">🗺️ OpenStreetMap (ถนน)</option>
+            <option value="carto-light">⬜ CartoDB Light</option>
+            <option value="carto-dark">⬛ CartoDB Dark</option>
+            <option value="esri-sat" selected>🛰️ Esri Satellite (ดาวเทียม)</option>
+            <option value="esri-sat-label">🛰️+🏷️ Esri Satellite + Labels</option>
+            <option value="esri-terrain">⛰️ Esri Terrain (ภูมิประเทศ)</option>
+            <option value="esri-relief">🌄 Esri Shaded Relief</option>
+            <option value="esri-topo">📐 Esri World Topo</option>
+            <option value="none">❌ ไม่มีพื้นหลัง</option>
+        </select>
+        
+        <div class="sub-label" style="color:#58a6ff;">Layer 1: ไฟล์หลัก_GeoJSON</div>
+        <input type="file" id="geoInput1" accept=".geojson,.json" onchange="loadLayer(1)">
+        <div class="help-text" style="font-size:0.75rem; color:#999; margin-top:4px;">\\192.168.13.19\Pool-Graphic19- Graphic Project -\WEB_APP\Map_GP-Studio\GeoJson</div>
+        <label>Field แสดงชื่อ</label>
+        <select id="field1" onchange="refreshAllLabels()"></select>
+
+        <div style="background: rgba(88,166,255,0.05); padding: 8px; border-radius: 6px; border: 1px solid rgba(88,166,255,0.1); margin-top: 10px;">
+          <label style="color:#e3b341; font-weight:bold; margin-top:0;">🔖 จัดการป้ายชื่อหลัก (Layer 1)</label>
+          <div class="toggle-row">
+            <input type="checkbox" id="showLabels" checked onchange="refreshAllLabels()">
+            <span style="font-size:0.7rem;">แสดงชื่อทั้งหมด</span>
+          </div>
+          <div class="toggle-row">
+            <input type="checkbox" id="showUnpaintedLabels" onchange="refreshAllLabels()">
+            <span style="font-size:0.7rem;">แสดงชื่อที่ยังไม่ระบาย</span>
+          </div>
+          
+          <label style="margin-top:8px;">ขนาดชื่อ (ส่วนที่เลือก)</label>
+          <div class="row">
+            <input type="range" id="labelSizePainted" min="6" max="120" value="20" class="flex-1" oninput="refreshAllLabels()">
+            <span id="labelSizePaintedTxt" style="font-size:0.65rem; width:25px;">20</span>
+          </div>
+          <label style="margin-top:4px;">ขนาดชื่อ (ส่วนที่ยังไม่เลือก)</label>
+          <div class="row">
+            <input type="range" id="labelSizeUnpainted" min="6" max="120" value="12" class="flex-1" oninput="refreshAllLabels()">
+            <span id="labelSizeUnpaintedTxt" style="font-size:0.65rem; width:25px;">12</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. LAYER 2 (OVERLAY) PANEL -->
+    <div class="panel" id="layer2-panel">
+      <div class="panel-header" onclick="togglePanel(this)">
+        <span class="ph-title" style="color:#bc8cff;">📁 ไฟล์รอง (Overlay)</span>
+        <span class="ph-chevron">▼</span>
+      </div>
+      <div class="panel-body">
+        <div style="display:flex; align-items:center; justify-content:space-between;">
+          <label style="margin:0;">GeoJSON รอง (ระบายสีได้อิสระ)</label>
+          <span id="l2ToggleIcon" onclick="toggleLayer2Visibility()" style="cursor:pointer; color:#bc8cff; font-size:0.7rem; font-weight:bold;">▲ ซ่อนเลเยอร์</span>
+        </div>
+        <input type="file" id="geoInput2" accept=".geojson,.json" onchange="loadLayer(2)">
+        <label>Field แสดงชื่อ</label>
+        <select id="field2" onchange="refreshAllLabels()"></select>
+        
+        <!-- LAYER 2 LABELS -->
+        <div style="background: rgba(188, 140, 255, 0.05); padding: 8px; border-radius: 6px; border: 1px solid rgba(188, 140, 255, 0.2); margin-top: 10px;">
+          <label style="color:#bc8cff; font-weight:bold; margin-top:0;">🔖 ป้ายชื่อ Layer 2</label>
+          <div class="toggle-row">
+            <input type="checkbox" id="showL2Labels" checked onchange="refreshAllLabels()">
+            <span style="font-size:0.7rem;">แสดงชื่อไฟล์รอง (เฉพาะที่ระบายสี)</span>
+          </div>
+          <label style="margin-top:8px;">ขนาดข้อความ</label>
+          <div class="row">
+            <input type="range" id="labelSizeL2" min="6" max="120" value="14" class="flex-1" oninput="refreshAllLabels()">
+            <span id="labelSizeL2Txt" style="font-size:0.65rem; width:25px;">14</span>
+          </div>
+        </div>
+
+        <div id="l2-style-panel" style="margin-top:8px; padding:8px; background:rgba(188, 140, 255, 0.05); border-radius:6px; border:1px solid rgba(188, 140, 255, 0.2);">
+          <label style="margin:0; margin-bottom:5px;">สไตล์ไฟล์รอง (พื้นฐาน)</label>
+          <div class="row">
+            <input type="color" id="l2Fill" value="#bc8cff" oninput="updateLayer2Style()">
+            <input type="range" id="l2FillOp" min="0" max="100" value="15" class="flex-1" oninput="updateLayer2Style()">
+          </div>
+          <div class="row" style="margin-top:5px;">
+            <input type="color" id="l2Stroke" value="#bc8cff" oninput="updateLayer2Style()">
+            <input type="range" id="l2StrokeW" min="0" max="10" step="0.5" value="1.5" class="flex-1" oninput="updateLayer2Style()">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. PAINT SELECTED PANEL -->
+    <div class="panel">
+      <div class="panel-header" onclick="togglePanel(this)">
+        <span class="ph-title" style="color:#58a6ff;">🖌️ ระบายสีส่วนที่เลือก</span>
+        <span class="ph-chevron">▼</span>
+      </div>
+      <div class="panel-body">
+        <label>สีระบาย (Preset)</label>
+        <div class="color-grid" id="fillPresetsSelected"></div>
+        <div class="row" style="margin-top:8px;">
+          <input type="color" id="brushColor" value="#da3633">
+          <input type="range" id="brushOp" min="0" max="100" value="85" class="flex-1">
+        </div>
+
+        <label style="margin-top:12px;">เส้นขอบ</label>
+        <div class="color-grid" id="strokePresetsSelected"></div>
+        <div class="row" style="margin-top:8px;">
+          <input type="color" id="strokeColor" value="#ffffff">
+          <input type="range" id="strokeWidth" min="0" max="10" step="0.5" value="1.5" class="flex-1">
+        </div>
+
+        <div id="feat-actions" style="display:none; border-top:1px solid #30363d; margin-top:15px; padding-top:10px;">
+           <div style="font-size:0.7rem; color:#58a6ff; margin-bottom:5px;">แก้ไขพื้นที่: <span id="featNameUI">...</span></div>
+           <div class="row">
+              <button class="btn-danger flex-1" onclick="resetFeatStyle()">🗑️ ล้างสี</button>
+              <button class="btn-outline flex-1" onclick="resetFeatFont()">🔡 คืนค่า Font</button>
+           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4. FX MENU PANEL -->
+    <div class="panel">
+      <div class="panel-header" onclick="togglePanel(this)">
+        <span class="ph-title" style="color:#f472b6;">✨ FX เมนู (เฉพาะส่วนที่เลือก)</span>
+        <span class="ph-chevron">▼</span>
+      </div>
+      <div class="panel-body">
+        <!-- Drop Shadow -->
+        <div class="fx-item">
+          <div class="fx-item-header" onclick="toggleFXBody(this)">
+            <label class="toggle-row" style="margin:0;">
+              <input type="checkbox" id="fx-ds-en" onchange="updateFXLayer()">
+              <span style="color:#e2e8f0; font-weight:bold;">Drop Shadow (เงาตกกระทบ)</span>
+            </label>
+            <span style="color:#8b949e; font-size:0.6rem;">ตั้งค่า▼</span>
+          </div>
+          <div class="fx-body">
+            <div class="row">
+              <input type="color" id="fx-ds-col" value="#000000" oninput="updateFXLayer()">
+              <input type="range" id="fx-ds-op" min="0" max="100" value="60" class="flex-1" title="Opacity" oninput="updateFXLayer()">
+            </div>
+            <div class="row" style="margin-top:4px;">
+              <label class="flex-1">แกน X</label>
+              <input type="range" id="fx-ds-x" min="-20" max="20" value="4" oninput="updateFXLayer()">
+            </div>
+            <div class="row" style="margin-top:4px;">
+              <label class="flex-1">แกน Y</label>
+              <input type="range" id="fx-ds-y" min="-20" max="20" value="4" oninput="updateFXLayer()">
+            </div>
+            <label style="margin-top:4px;">ความเบลอกระจาย</label>
+            <input type="range" id="fx-ds-blur" min="0" max="20" value="8" oninput="updateFXLayer()">
+          </div>
+        </div>
+
+        <!-- Outer Glow -->
+        <div class="fx-item">
+          <div class="fx-item-header" onclick="toggleFXBody(this)">
+            <label class="toggle-row" style="margin:0;">
+              <input type="checkbox" id="fx-og-en" onchange="updateFXLayer()">
+              <span style="color:#e2e8f0; font-weight:bold;">Outer Glow (เรืองแสงด้านนอก)</span>
+            </label>
+            <span style="color:#8b949e; font-size:0.6rem;">ตั้งค่า▼</span>
+          </div>
+          <div class="fx-body">
+            <div class="row">
+              <input type="color" id="fx-og-col" value="#fbbf24" oninput="updateFXLayer()">
+              <input type="range" id="fx-og-op" min="0" max="100" value="80" class="flex-1" title="Opacity" oninput="updateFXLayer()">
+            </div>
+            <label>ความกว้างการเรืองแสง</label>
+            <input type="range" id="fx-og-blur" min="1" max="30" value="12" oninput="updateFXLayer()">
+          </div>
+        </div>
+
+        <!-- Inner Shadow -->
+        <div class="fx-item">
+          <div class="fx-item-header" onclick="toggleFXBody(this)">
+            <label class="toggle-row" style="margin:0;">
+              <input type="checkbox" id="fx-is-en" onchange="updateFXLayer()">
+              <span style="color:#e2e8f0; font-weight:bold;">Inner Shadow (เงาด้านใน)</span>
+            </label>
+            <span style="color:#8b949e; font-size:0.6rem;">ตั้งค่า▼</span>
+          </div>
+          <div class="fx-body">
+            <div class="row">
+              <input type="color" id="fx-is-col" value="#000000" oninput="updateFXLayer()">
+              <input type="range" id="fx-is-op" min="0" max="100" value="60" class="flex-1" title="Opacity" oninput="updateFXLayer()">
+            </div>
+            <div class="row" style="margin-top:4px;">
+              <label class="flex-1">แกน X</label>
+              <input type="range" id="fx-is-x" min="-20" max="20" value="4" oninput="updateFXLayer()">
+            </div>
+            <div class="row" style="margin-top:4px;">
+              <label class="flex-1">แกน Y</label>
+              <input type="range" id="fx-is-y" min="-20" max="20" value="4" oninput="updateFXLayer()">
+            </div>
+            <label style="margin-top:4px;">ความเบลอ</label>
+            <input type="range" id="fx-is-blur" min="0" max="30" value="8" oninput="updateFXLayer()">
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- 5. ANNOTATION PANEL -->
+    <div class="panel" id="annotate-panel">
+      <div class="panel-header" onclick="togglePanel(this)">
+        <span class="ph-title" style="color:#f0883e;">📍 เครื่องมือปักหมุด</span>
+        <span class="ph-chevron">▼</span>
+      </div>
+      <div class="panel-body">
+        <label>ข้อความป้าย</label>
+        <input type="text" id="annText" placeholder="พิมพ์ชื่อสถานที่...">
+        
+        <label style="margin-top:10px;">เลือกสัญลักษณ์ <span style="color:#58a6ff; font-size:0.65rem;">(คลิกซ้ำเพื่อยกเลิกการปักหมุด)</span></label>
+        <div class="shape-row">
+          <div class="shape-btn" id="shape-circle" onclick="setShape('circle')" title="วงกลม">
+             <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="currentColor"/></svg>
+          </div>
+          <div class="shape-btn" id="shape-diamond" onclick="setShape('diamond')" title="เพชร">
+             <svg viewBox="0 0 24 24"><path d="M12 2L2 12l10 10 10-10L12 2z" fill="currentColor"/></svg>
+          </div>
+          <div class="shape-btn" id="shape-star" onclick="setShape('star')" title="ดาว">
+             <svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14l-5-4.87 6.91-1.01L12 2z" fill="currentColor"/></svg>
+          </div>
+          <div class="shape-btn" id="shape-pin" onclick="setShape('pin')" title="หมุดปัก">
+             <svg viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" fill="currentColor"/></svg>
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:12px; gap:8px;">
+          <div class="flex-1">
+            <label>สีหมุด</label>
+            <input type="color" id="pinColor" value="#58a6ff">
+          </div>
+          <div class="flex-1">
+            <label>สีป้าย</label>
+            <input type="color" id="pinBgColor" value="#ffffff">
+          </div>
+          <div class="flex-1">
+            <label>สีชื่อ</label>
+            <input type="color" id="pinTxtColor" value="#111111">
+          </div>
+        </div>
+        
+        <div class="row" style="margin-top:10px;">
+          <div class="flex-1">
+            <label>ขนาดข้อความ: <span id="pinFontSizeVal">14px</span></label>
+            <input type="range" id="pinFontSize" min="8" max="100" value="14" oninput="document.getElementById('pinFontSizeVal').textContent=this.value+'px'">
+          </div>
+          <div class="flex-1">
+            <label>ขนาดหมุด: <span id="pinSizeVal">24px</span></label>
+            <input type="range" id="pinSize" min="10" max="100" value="24" oninput="document.getElementById('pinSizeVal').textContent=this.value+'px'">
+          </div>
+        </div>
+
+        <div class="help-footer">
+          <span class="help-num">1</span> เลือกรูปทรง → <span class="help-num">2</span> คลิกบนแผนที่
+        </div>
+      </div>
+    </div>
+    
+    <!-- Edit Annotation Sub-Panel -->
+    <div id="edit-ann-panel" class="panel" style="display:none; border-color: #58a6ff;">
+      <div class="panel-header open">
+        <span class="ph-title" style="color:#58a6ff;">✏️ แก้ไขป้ายที่เลือก</span>
+      </div>
+      <div class="panel-body open">
+        <label>ข้อความป้าย</label>
+        <input type="text" id="editAnnText" oninput="updateSelectedAnn()">
+        
+        <div class="row" style="margin-top:8px;">
+          <div class="flex-1">
+            <label>สีหมุด</label>
+            <input type="color" id="editPinColor" oninput="updateSelectedAnn()">
+          </div>
+          <div class="flex-1">
+            <label>สีพื้นป้าย</label>
+            <input type="color" id="editPinBgColor" oninput="updateSelectedAnn()">
+          </div>
+          <div class="flex-1">
+            <label>สีข้อความ</label>
+            <input type="color" id="editPinTxtColor" oninput="updateSelectedAnn()">
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:8px;">
+          <div class="flex-1">
+            <label>ขนาดชื่อ: <span id="editAnnSizeVal">14px</span></label>
+            <input type="range" id="editAnnSize" min="8" max="120" value="14" oninput="updateSelectedAnn()">
+          </div>
+          <div class="flex-1">
+            <label>ขนาดหมุด: <span id="editPinSizeVal">24px</span></label>
+            <input type="range" id="editPinSize" min="10" max="120" value="24" oninput="updateSelectedAnn()">
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:12px;">
+           <button class="btn-danger flex-1" onclick="deleteSelectedAnn()">🗑️ ลบ</button>
+           <button class="btn-outline flex-1" onclick="closeEditAnn()">✖ ปิด</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 6. PAINT UNSELECTED (GLOBAL) -->
+    <div class="panel">
+      <div class="panel-header" onclick="togglePanel(this)">
+        <span class="ph-title" style="color:#8b949e;">🌐 ระบายสีส่วนที่ไม่ได้เลือก</span>
+        <span class="ph-chevron">▼</span>
+      </div>
+      <div class="panel-body">
+        <label>สีพื้นหลังเริ่มต้น</label>
+        <div class="color-grid" id="fillPresetsUnpainted"></div>
+        <div class="row" style="margin-top:8px;">
+          <input type="color" id="globalFill" value="#ffffff" oninput="updateGlobalStyle()">
+          <input type="range" id="globalFillOp" min="0" max="100" value="5" class="flex-1" oninput="updateGlobalStyle()">
+        </div>
+        
+        <label style="margin-top:12px;">เส้นขอบเริ่มต้น</label>
+        <div class="color-grid" id="strokePresetsUnpainted"></div>
+        <div class="row" style="margin-top:8px;">
+          <input type="color" id="globalStroke" value="#30363d" oninput="updateGlobalStyle()">
+          <input type="range" id="globalStrokeW" min="0" max="10" step="0.5" value="1" class="flex-1" oninput="updateGlobalStyle()">
+        </div>
+      </div>
+    </div>
+
+    <!-- 7. EXPORT PANEL -->
+    <div class="panel" id="export-panel">
+      <div class="panel-header" onclick="togglePanel(this)">
+        <span class="ph-title" style="color:#da3633;">📤 ส่งออกรูปภาพ</span>
+        <span class="ph-chevron">▼</span>
+      </div>
+      <div class="panel-body">
+        <button class="btn-primary" onclick="toggleCrop()" style="margin-bottom: 10px;">✂️ เปิด/ปิด Crop Box</button>
+        <div id="export-controls" style="display:none; margin-top:5px;">
+          <label>สัดส่วนภาพ</label>
+          <div class="row" style="margin-bottom:8px;">
+            <button class="btn-outline flex-1" id="btn169" onclick="setCropRatio(16,9)">16:9</button>
+            <button class="btn-outline flex-1" id="btn11" onclick="setCropRatio(1,1)">1:1</button>
+            <button class="btn-outline flex-1" id="btn916" onclick="setCropRatio(9,16)">9:16</button>
+          </div>
+          <label>ความละเอียด</label>
+          <select id="exportScale" onchange="updateCropLabel()">
+            <option value="hd" selected>Full HD (1920x1080)</option>
+            <option value="4k">4K Ultra HD (3840x2160)</option>
+            <option value="2">2x (High Res)</option>
+            <option value="1">1x (Original)</option>
+          </select>
+          
+          <div class="row" style="margin-top:10px;">
+            <button class="btn-primary flex-1" id="exportBtn" onclick="exportImage()">⬇️ บันทึก PNG</button>
+            <button class="btn-outline flex-1" id="exportBtnSvg" onclick="exportSVG()" style="border-color:#58a6ff; color:#58a6ff;">⬇️ บันทึก SVG</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div id="map-container">
+  <div id="map"></div>
+  <div id="crop-box">
+    <div id="crop-hdr">⠿ ลากย้ายตำแหน่ง</div>
+    <div id="crop-dims"></div>
+    <div class="rh rh-tl" data-dir="tl"></div>
+    <div class="rh rh-tr" data-dir="tr"></div>
+    <div class="rh rh-bl" data-dir="bl"></div>
+    <div class="rh rh-br" data-dir="br"></div>
+  </div>
+</div>
+
+<script>
+// ── STATE ──
+let map, layer1, layer2, tileLayer, tileLayerLabels;
+let paintedFeatures = new Map(), labelMarkers = new Map();
+let currentRatio = { w: 16, h: 9 }, layer2Visible = true, selectedLayer = null;
+
+// Annotation state
+let annLayer, annStep = 0, tempPinLL = null, tempPinMarker = null, pinShape = null, selectedAnnMarker = null;
+let isPinArmed = false; 
+let actionHistory = []; 
+let allAnnotations = []; 
+
+const STANDARD_COLORS = ['#da3633', '#1f6feb', '#f97316', '#fbbf24', '#ffffff', '#000000'];
+
+function hexToRgba(hex, opacity) {
+    hex = hex.replace('#', '');
+    let r = parseInt(hex.substring(0, 2), 16), g = parseInt(hex.substring(2, 4), 16), b = parseInt(hex.substring(4, 6), 16);
+    return `rgba(${r},${g},${b},${opacity})`;
+}
+
+// ── NEW VISUAL CENTER USING TURF GRID SCAN ──
+function getBestCenter(layer) {
+    if (layer.feature && layer.feature.geometry && typeof turf !== 'undefined') {
+        try {
+            const geom = layer.feature.geometry;
+            let bestPoly = null;
+            let maxArea = -1;
+
+            if (geom.type === 'MultiPolygon') {
+                geom.coordinates.forEach(polyCoords => {
+                    const polyFeature = turf.polygon(polyCoords);
+                    const area = turf.area(polyFeature);
+                    if (area > maxArea) {
+                        maxArea = area;
+                        bestPoly = polyFeature;
+                    }
+                });
+            } else if (geom.type === 'Polygon') {
+                bestPoly = turf.polygon(geom.coordinates);
+            }
+
+            if (bestPoly) {
+                const bbox = turf.bbox(bestPoly);
+                const steps = 25; 
+                const xStep = (bbox[2] - bbox[0]) / steps;
+                const yStep = (bbox[3] - bbox[1]) / steps;
+                
+                let maxDist = -1;
+                let bestPt = null;
+                const lines = turf.polygonToLine(bestPoly); 
+                
+                for (let x = bbox[0] + xStep/2; x < bbox[2]; x += xStep) {
+                    for (let y = bbox[1] + yStep/2; y < bbox[3]; y += yStep) {
+                        const pt = turf.point([x, y]);
+                        if (turf.booleanPointInPolygon(pt, bestPoly)) {
+                            const dist = turf.pointToLineDistance(pt, lines);
+                            if (dist > maxDist) {
+                                maxDist = dist;
+                                bestPt = pt;
+                            }
+                        }
+                    }
+                }
+
+                if (bestPt) {
+                    return L.latLng(bestPt.geometry.coordinates[1], bestPt.geometry.coordinates[0]);
+                } else {
+                    const pt = turf.pointOnFeature(bestPoly);
+                    return L.latLng(pt.geometry.coordinates[1], pt.geometry.coordinates[0]);
+                }
+            }
+        } catch (e) {
+            console.warn("Turf calculation failed", e);
+        }
+    }
+    
+    if (layer.getBounds) {
+        return layer.getBounds().getCenter();
+    }
+    return layer.getLatLng ? layer.getLatLng() : map.getCenter();
+}
+
+// ── INIT ──
+function initMap() {
+    map = L.map('map', { zoomControl: false, attributionControl: false, preferCanvas: false }).setView([13.75, 100.5], 6);
+    annLayer = L.layerGroup().addTo(map);
+    changeTile();
+    
+    map.on('click', onMapClick);
+    map.on('zoomend', () => {
+        allAnnotations.forEach(data => updateAnnotationLine(data));
+    });
+
+    window.addEventListener('keydown', e => {
+        if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') return;
+        if ((e.key === 'Delete' || e.key === 'Backspace') && selectedAnnMarker) deleteSelectedAnn();
+    });
+    
+    initCropEvents();
+    setCropRatio(16, 9);
+    buildAllPresets();
+}
+
+function buildAllPresets() {
+    const fillSel = document.getElementById('fillPresetsSelected'), strokeSel = document.getElementById('strokePresetsSelected');
+    const fillUnp = document.getElementById('fillPresetsUnpainted'), strokeUnp = document.getElementById('strokePresetsUnpainted');
+    
+    if (fillSel && strokeSel && fillUnp && strokeUnp) {
+        STANDARD_COLORS.forEach(c => {
+            const f1 = document.createElement('div'); f1.className = 'color-swatch'; f1.style.background = c; f1.onclick = () => { document.getElementById('brushColor').value = c; }; fillSel.appendChild(f1);
+            const s1 = document.createElement('div'); s1.className = 'color-swatch'; s1.style.background = c; s1.onclick = () => { document.getElementById('strokeColor').value = c; }; strokeSel.appendChild(s1);
+            
+            const f2 = document.createElement('div'); f2.className = 'color-swatch'; f2.style.background = c; f2.onclick = () => { const el = document.getElementById('globalFill'); if(el){ el.value = c; updateGlobalStyle(); }}; fillUnp.appendChild(f2);
+            const s2 = document.createElement('div'); s2.className = 'color-swatch'; s2.style.background = c; s2.onclick = () => { const el = document.getElementById('globalStroke'); if(el){ el.value = c; updateGlobalStyle(); }}; strokeUnp.appendChild(s2);
+        });
+    }
+}
+
+function changeTile() {
+    const p = document.getElementById('tileProvider').value;
+    if(tileLayer) map.removeLayer(tileLayer);
+    if(tileLayerLabels) map.removeLayer(tileLayerLabels);
+    const urls = {
+        'osm': 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        'carto-light': 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+        'carto-dark': 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+        'esri-sat': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        'esri-sat-label': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        'esri-terrain': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}',
+        'esri-relief': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}',
+        'esri-topo': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}'
+    };
+    if(p === 'none') return;
+    tileLayer = L.tileLayer(urls[p] || urls['esri-sat'], { crossOrigin: true }).addTo(map);
+    if(p === 'esri-sat-label') tileLayerLabels = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', { crossOrigin: true }).addTo(map);
+    tileLayer.bringToBack();
+}
+
+// ── FX MENU LOGIC ──
+function toggleFXBody(headerEl) {
+    const body = headerEl.nextElementSibling;
+    if(body && body.classList.contains('fx-body')) body.classList.toggle('open');
+}
+
+function updateFXLayer() {
+    let filters = [];
+    
+    // Drop Shadow
+    if(document.getElementById('fx-ds-en').checked) {
+        const c = document.getElementById('fx-ds-col').value, op = document.getElementById('fx-ds-op').value / 100, b = document.getElementById('fx-ds-blur').value;
+        const x = document.getElementById('fx-ds-x').value, y = document.getElementById('fx-ds-y').value;
+        filters.push(`drop-shadow(${x}px ${y}px ${b}px ${hexToRgba(c, op)})`);
+    }
+    // Outer Glow
+    if(document.getElementById('fx-og-en').checked) {
+        const c = document.getElementById('fx-og-col').value, op = document.getElementById('fx-og-op').value / 100, b = document.getElementById('fx-og-blur').value;
+        filters.push(`drop-shadow(0px 0px ${b}px ${hexToRgba(c, op)})`);
+    }
+
+    // Inner Shadow (Via dynamic SVG Filter)
+    let hasInner = document.getElementById('fx-is-en').checked;
+    let svgDef = document.getElementById('dynamic-svg-filter');
+    if (!svgDef) {
+        svgDef = document.createElement('div');
+        svgDef.id = 'dynamic-svg-filter';
+        document.body.appendChild(svgDef);
+    }
+    
+    if (hasInner) {
+        const c = document.getElementById('fx-is-col').value, op = document.getElementById('fx-is-op').value / 100;
+        const b = document.getElementById('fx-is-blur').value, x = document.getElementById('fx-is-x').value, y = document.getElementById('fx-is-y').value;
+        
+        svgDef.innerHTML = `
+        <svg width="0" height="0" style="position:absolute;">
+          <defs>
+            <filter id="custom-inner-shadow">
+              <feOffset dx="${x}" dy="${y}"/>
+              <feGaussianBlur stdDeviation="${b}" result="offset-blur"/>
+              <feComposite operator="out" in="SourceGraphic" in2="offset-blur" result="inverse"/>
+              <feFlood flood-color="${c}" flood-opacity="${op}" result="color"/>
+              <feComposite operator="in" in="color" in2="inverse" result="shadow"/>
+              <feComposite operator="over" in="shadow" in2="SourceGraphic"/>
+            </filter>
+          </defs>
+        </svg>`;
+        filters.push(`url(#custom-inner-shadow)`);
+    } else {
+        svgDef.innerHTML = '';
+    }
+    
+    const styleEl = document.getElementById('dynamic-fx');
+    if (filters.length > 0) {
+        styleEl.innerHTML = `path.painted-fx { filter: ${filters.join(' ')} !important; }`;
+    } else {
+        styleEl.innerHTML = '';
+    }
+}
+
+function applyClassToLayer(layer, className) {
+    if (layer.getElement) {
+        const el = layer.getElement();
+        if (el) {
+            if (className) {
+                el.classList.add(className);
+            } else {
+                el.classList.remove('painted-fx');
+            }
+        }
+    }
+}
+
+// ── SMART ANNOTATION LEADER LINES ──
+function updateAnnotationLine(data) {
+    if (!data.label || !map) return;
+    const pPin = map.latLngToLayerPoint(data.aLL);
+    const pLabelTopLeft = map.latLngToLayerPoint(data.label.getLatLng());
+    
+    const el = data.label.getElement();
+    if (!el) return;
+    const lblDiv = el.querySelector('.ann-lbl');
+    if (!lblDiv) return;
+    
+    const w = lblDiv.offsetWidth;
+    const h = lblDiv.offsetHeight;
+    
+    const pBL = L.point(pLabelTopLeft.x, pLabelTopLeft.y + h - 2); 
+    const pBR = L.point(pLabelTopLeft.x + w, pLabelTopLeft.y + h - 2);
+    
+    const isLeft = pPin.x < (pLabelTopLeft.x + w/2);
+    const targetP = isLeft ? pBL : pBR;
+    
+    data.line.setLatLngs([data.aLL, map.layerPointToLatLng(targetP)]);
+}
+
+// ── ANNOTATION LOGIC ──
+function setShape(s) { 
+    const shEl = document.getElementById('shape-' + s); 
+    
+    // Toggle Off if clicking the already selected shape
+    if (shEl && shEl.classList.contains('sel')) {
+        shEl.classList.remove('sel');
+        isPinArmed = false;
+        pinShape = null;
+        if (annStep === 1) {
+            if(tempPinMarker && annLayer) annLayer.removeLayer(tempPinMarker);
+            tempPinMarker = null;
+            annStep = 0;
+        }
+        return;
+    }
+
+    pinShape = s; 
+    isPinArmed = true; 
+    document.querySelectorAll('.shape-btn').forEach(b => b.classList.remove('sel')); 
+    if(shEl) shEl.classList.add('sel'); 
+    closeEditAnn();
+}
+
+function onMapClick(e) {
+    if (selectedAnnMarker) {
+        closeEditAnn();
+        return; 
+    }
+    
+    if (!isPinArmed) return;
+    
+    if (annStep === 0) {
+        tempPinLL = e.latlng; 
+        const pinCol = document.getElementById('pinColor').value;
+        const ps = document.getElementById('pinSize') ? parseInt(document.getElementById('pinSize').value) : 24;
+
+        if (pinShape === 'circle') tempPinMarker = L.circleMarker(e.latlng, { radius: ps/4, fillColor: pinCol, color: '#000', weight: 1.5, fillOpacity: 1 }).addTo(annLayer);
+        else tempPinMarker = L.marker(e.latlng, { icon: L.divIcon({ className: '', html: getPinSvg(pinCol, 8, pinShape), iconSize: [ps, ps], iconAnchor: [ps/2, ps/2] }) }).addTo(annLayer);
+        annStep = 1;
+    } else {
+        const txt = document.getElementById('annText').value.trim();
+        createAnnotation(tempPinLL, e.latlng, txt);
+        if (tempPinMarker) annLayer.removeLayer(tempPinMarker);
+        
+        tempPinMarker = null; 
+        annStep = 0; 
+        document.getElementById('annText').value = '';
+    }
+}
+
+function getPinSvg(color, r, shape) {
+    if (shape === 'diamond') return `<svg viewBox="0 0 24 24"><path d="M12 2L2 12l10 10 10-10L12 2z" fill="${color}" stroke="#000" stroke-width="1.5"/></svg>`;
+    if (shape === 'star') return `<svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14l-5-4.87 6.91-1.01L12 2z" fill="${color}" stroke="#000" stroke-width="1.5"/></svg>`;
+    if (shape === 'pin') return `<svg viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" fill="${color}" stroke="#000" stroke-width="1.5"/></svg>`;
+    return `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="${color}" stroke="#000" stroke-width="1.5"/></svg>`;
+}
+
+function createAnnotation(aLL, lLL, txt) {
+    const col = document.getElementById('pinColor').value, tCol = document.getElementById('pinTxtColor').value, bgCol = document.getElementById('pinBgColor').value, fs = document.getElementById('pinFontSize').value;
+    const ps = document.getElementById('pinSize') ? parseInt(document.getElementById('pinSize').value) : 24;
+
+    const line = L.polyline([aLL, lLL], { color: '#888', weight: 1.5, dashArray: '5,5' }).addTo(annLayer);
+    
+    let dot = (pinShape === 'circle') 
+        ? L.circleMarker(aLL, { radius: ps/4, fillColor: col, color: '#000', weight: 1.5, fillOpacity: 1, draggable: true }).addTo(annLayer) 
+        : L.marker(aLL, { icon: L.divIcon({ className: '', html: getPinSvg(col, 8, pinShape), iconSize: [ps, ps], iconAnchor: [ps/2, ps/2] }), draggable: true }).addTo(annLayer);
+    
+    const label = L.marker(lLL, { icon: L.divIcon({ className: '', html: `<div class="ann-lbl" style="background:${bgCol}; color:${tCol}; border:2px solid ${col}; font-size:${fs}px;">${txt || 'สถานที่'}</div>`, iconSize: null, iconAnchor: [0, 0] }), draggable: true }).addTo(annLayer);
+    
+    label._data = { line, dot, label, txt: txt || 'สถานที่', fs, ps, bgCol, tCol, col, aLL, shape: pinShape };
+    allAnnotations.push(label._data);
+    
+    label.on('drag', e => updateAnnotationLine(label._data));
+    if(dot.on) { 
+        dot.on('drag', e => { label._data.aLL = e.latlng; updateAnnotationLine(label._data); }); 
+        dot.on('click', e => { L.DomEvent.stopPropagation(e); openEditAnn(label); }); 
+    }
+    label.on('click', e => { L.DomEvent.stopPropagation(e); openEditAnn(label); });
+
+    actionHistory.push({ type: 'annotate', obj: label._data });
+    
+    setTimeout(() => updateAnnotationLine(label._data), 50);
+}
+
+function openEditAnn(mk) { 
+    closeEditAnn(); 
+    selectedAnnMarker = mk; 
+    const el = mk.getElement(); 
+    if(el){ 
+        const lbl = el.querySelector('.ann-lbl'); 
+        if(lbl) lbl.classList.add('selected'); 
+    } 
+    const pnl = document.getElementById('edit-ann-panel'); 
+    if(pnl) {
+        pnl.style.display = 'block'; 
+        pnl.querySelector('.panel-body').classList.add('open');
+    }
+    
+    document.getElementById('editAnnText').value = mk._data.txt; 
+    document.getElementById('editAnnSize').value = mk._data.fs; 
+    document.getElementById('editAnnSizeVal').textContent = mk._data.fs + 'px';
+    
+    document.getElementById('editPinColor').value = mk._data.col;
+    document.getElementById('editPinBgColor').value = mk._data.bgCol;
+    document.getElementById('editPinTxtColor').value = mk._data.tCol;
+    
+    document.getElementById('editPinSize').value = mk._data.ps || 24;
+    document.getElementById('editPinSizeVal').textContent = (mk._data.ps || 24) + 'px';
+}
+
+function updateSelectedAnn() { 
+    if(!selectedAnnMarker) return; 
+    const d = selectedAnnMarker._data; 
+    d.txt = document.getElementById('editAnnText').value; 
+    d.fs = document.getElementById('editAnnSize').value; 
+    d.ps = parseInt(document.getElementById('editPinSize').value);
+    d.col = document.getElementById('editPinColor').value;
+    d.bgCol = document.getElementById('editPinBgColor').value;
+    d.tCol = document.getElementById('editPinTxtColor').value;
+
+    document.getElementById('editAnnSizeVal').textContent = d.fs + 'px';
+    document.getElementById('editPinSizeVal').textContent = d.ps + 'px';
+    
+    selectedAnnMarker.setIcon(L.divIcon({ className: '', html: `<div class="ann-lbl selected" style="background:${d.bgCol}; color:${d.tCol}; border:2px solid ${d.col}; font-size:${d.fs}px;">${d.txt}</div>`, iconSize: null, iconAnchor: [0, 0] })); 
+
+    if (d.shape === 'circle') {
+        d.dot.setStyle({ fillColor: d.col });
+        d.dot.setRadius(d.ps / 4);
+    } else {
+        d.dot.setIcon(L.divIcon({ className: '', html: getPinSvg(d.col, 8, d.shape), iconSize: [d.ps, d.ps], iconAnchor: [d.ps/2, d.ps/2] }));
+    }
+    
+    setTimeout(() => updateAnnotationLine(d), 50);
+}
+
+function removeAnnotationData(data) {
+    const idx = allAnnotations.indexOf(data);
+    if (idx > -1) allAnnotations.splice(idx, 1);
+}
+
+function deleteSelectedAnn() { 
+    if(selectedAnnMarker) { 
+        annLayer.removeLayer(selectedAnnMarker._data.line); 
+        annLayer.removeLayer(selectedAnnMarker._data.dot); 
+        annLayer.removeLayer(selectedAnnMarker); 
+        removeAnnotationData(selectedAnnMarker._data);
+        closeEditAnn(); 
+    } 
+}
+
+function closeEditAnn() { 
+    if(selectedAnnMarker) { 
+        const el = selectedAnnMarker.getElement(); 
+        if(el){ 
+            const lbl = el.querySelector('.ann-lbl'); 
+            if(lbl) lbl.classList.remove('selected'); 
+        } 
+    } 
+    selectedAnnMarker = null; 
+    const pnl = document.getElementById('edit-ann-panel'); 
+    if(pnl) pnl.style.display = 'none'; 
+}
+
+// ── LAYERS ──
+function loadLayer(n) {
+    const input = document.getElementById('geoInput' + n), file = input.files[0]; if(!file) return;
+    const reader = new FileReader(); reader.onload = e => {
+        const data = JSON.parse(e.target.result);
+        if(n === 1) { 
+            if(layer1) map.removeLayer(layer1); 
+            layer1 = L.geoJSON(data, {style: getFeatureStyle, onEachFeature}).addTo(map); 
+            map.fitBounds(layer1.getBounds()); 
+            populateFields(data, 'field1'); 
+            
+            // Re-apply DOM classes after load
+            layer1.eachLayer(l => {
+                const id = l._leaflet_id || l.id;
+                if (paintedFeatures.has(id)) {
+                    applyClassToLayer(l, 'painted-fx');
+                }
+            });
+        }
+        else { 
+            if(layer2) map.removeLayer(layer2); 
+            layer2 = L.geoJSON(data, {style: getLayer2Style, onEachFeature: onEachFeatureL2}).addTo(map); 
+            populateFields(data, 'field2'); 
+        }
+        refreshAllLabels();
+    }; reader.readAsText(file);
+}
+
+function getLayer2Style() { 
+    const elF = document.getElementById('l2Fill'), elO = document.getElementById('l2FillOp'), elS = document.getElementById('l2Stroke'), elW = document.getElementById('l2StrokeW');
+    const fv = elF ? elF.value : '#bc8cff', ov = elO ? (elO.value / 100) : 0.15, sv = elS ? elS.value : '#bc8cff', wv = elW ? parseFloat(elW.value) : 1.5;
+    return { fillColor: fv, fillOpacity: ov, color: sv, weight: wv }; 
+}
+
+function updateLayer2Style() { 
+    if(!layer2) return;
+    const elF = document.getElementById('l2Fill'), elO = document.getElementById('l2FillOp'), elS = document.getElementById('l2Stroke'), elW = document.getElementById('l2StrokeW');
+    const fv = elF ? elF.value : '#bc8cff', ov = elO ? (elO.value / 100) : 0.15, sv = elS ? elS.value : '#bc8cff', wv = elW ? parseFloat(elW.value) : 1.5;
+    
+    layer2.eachLayer(l => {
+        const id = l._leaflet_id;
+        if (paintedFeatures.has(id)) {
+            const p = paintedFeatures.get(id);
+            l.setStyle({fillColor: p.fill, fillOpacity: p.op, color: p.stroke, weight: p.weight});
+        } else {
+            l.setStyle({ fillColor: fv, fillOpacity: ov, color: sv, weight: wv });
+        }
+    });
+}
+
+function toggleLayer2Visibility() { if(!layer2) return; layer2Visible = !layer2Visible; const icon = document.getElementById('l2ToggleIcon'); if(layer2Visible) { layer2.addTo(map); if(icon) icon.textContent = '▲ ซ่อนเลเยอร์'; } else { map.removeLayer(layer2); if(icon) icon.textContent = '▼ แสดงเลเยอร์'; } }
+function populateFields(d, s) { const sel = document.getElementById(s); if(!sel) return; sel.innerHTML = '<option value="">-- ไม่แสดงชื่อ --</option>'; if(!d.features || !d.features[0]) return; Object.keys(d.features[0].properties).forEach(p => { let o = document.createElement('option'); o.value = p; o.textContent = p; if(['name', 'NAME_TH', 'name_th', 'prov_nam_t'].includes(p)) o.selected = true; sel.appendChild(o); }); }
+
+function getFeatureStyle(f) { 
+    const id = f._leaflet_id || f.id, p = paintedFeatures.get(id); 
+    if(p) return { fillColor: p.fill, fillOpacity: p.op, color: p.stroke, weight: p.weight, className: 'painted-fx' }; 
+    const elF = document.getElementById('globalFill'), elO = document.getElementById('globalFillOp'), elS = document.getElementById('globalStroke'), elW = document.getElementById('globalStrokeW');
+    const fv = elF ? elF.value : '#ffffff', ov = elO ? (elO.value / 100) : 0.05, sv = elS ? elS.value : '#30363d', wv = elW ? parseFloat(elW.value) : 1; 
+    return { fillColor: fv, fillOpacity: ov, color: sv, weight: wv, className: '' }; 
+}
+
+function updateGlobalStyle() { if(layer1) layer1.setStyle(getFeatureStyle); }
+
+function onEachFeature(f, l) {
+    l.on('click', e => {
+        if (selectedAnnMarker) { closeEditAnn(); return; }
+
+        if(isPinArmed) {
+            onMapClick(e);
+            return;
+        }
+
+        const elF = document.getElementById('brushColor'), elO = document.getElementById('brushOp'), elS = document.getElementById('strokeColor'), elW = document.getElementById('strokeWidth');
+        if(!elF || !elO || !elS || !elW) return;
+        const brush = { fill: elF.value, op: elO.value / 100, stroke: elS.value, weight: parseFloat(elW.value), className: 'painted-fx' };
+        
+        actionHistory.push({ type: 'paint', id: l._leaflet_id, layer: l, old: paintedFeatures.get(l._leaflet_id) });
+
+        paintedFeatures.set(l._leaflet_id, brush);
+        l.setStyle({fillColor: brush.fill, fillOpacity: brush.op, color: brush.stroke, weight: brush.weight});
+        applyClassToLayer(l, 'painted-fx');
+
+        l.bringToFront();
+        selectedLayer = l;
+        const actPanel = document.getElementById('feat-actions'); if(actPanel) actPanel.style.display = 'block';
+        const fld = document.getElementById('field1');
+        const nm = document.getElementById('featNameUI');
+        if(fld && nm) nm.textContent = l.feature.properties[fld.value] || 'Unknown';
+        refreshAllLabels();
+    });
+}
+
+function onEachFeatureL2(f, l) {
+    l.on('click', e => {
+        if (selectedAnnMarker) { closeEditAnn(); return; }
+
+        if(isPinArmed) {
+            onMapClick(e);
+            return;
+        }
+
+        const elF = document.getElementById('brushColor'), elO = document.getElementById('brushOp'), elS = document.getElementById('strokeColor'), elW = document.getElementById('strokeWidth');
+        if(!elF || !elO || !elS || !elW) return;
+        const brush = { fill: elF.value, op: elO.value / 100, stroke: elS.value, weight: parseFloat(elW.value), className: 'painted-fx', isL2: true };
+        
+        actionHistory.push({ type: 'paint', id: l._leaflet_id, layer: l, old: paintedFeatures.get(l._leaflet_id) });
+
+        paintedFeatures.set(l._leaflet_id, brush);
+        l.setStyle({fillColor: brush.fill, fillOpacity: brush.op, color: brush.stroke, weight: brush.weight});
+        applyClassToLayer(l, 'painted-fx');
+
+        l.bringToFront();
+        selectedLayer = l;
+        const actPanel = document.getElementById('feat-actions'); if(actPanel) actPanel.style.display = 'block';
+        const fld = document.getElementById('field2');
+        const nm = document.getElementById('featNameUI');
+        if(fld && nm) nm.textContent = l.feature.properties[fld.value] || 'Unknown (Layer 2)';
+        refreshAllLabels();
+    });
+}
+
+function resetFeatStyle() { 
+    if(!selectedLayer) return; 
+    paintedFeatures.delete(selectedLayer._leaflet_id); 
+    
+    if (layer2 && layer2.hasLayer(selectedLayer)) {
+        const elF = document.getElementById('l2Fill'), elO = document.getElementById('l2FillOp'), elS = document.getElementById('l2Stroke'), elW = document.getElementById('l2StrokeW');
+        const fv = elF ? elF.value : '#bc8cff', ov = elO ? (elO.value / 100) : 0.15, sv = elS ? elS.value : '#bc8cff', wv = elW ? parseFloat(elW.value) : 1.5;
+        selectedLayer.setStyle({ fillColor: fv, fillOpacity: ov, color: sv, weight: wv });
+    } else {
+        selectedLayer.setStyle(getFeatureStyle(selectedLayer.feature)); 
+    }
+    
+    applyClassToLayer(selectedLayer, null); 
+    refreshAllLabels(); 
+}
+
+function resetFeatFont() { refreshAllLabels(); }
+
+function refreshAllLabels() {
+    labelMarkers.forEach(m => map.removeLayer(m));
+    labelMarkers.clear();
+    
+    // Layer 1 Labels
+    const sl1 = document.getElementById('showLabels');
+    if(sl1 && sl1.checked) {
+        const lp = document.getElementById('labelSizePainted'), lu = document.getElementById('labelSizeUnpainted');
+        const sp = lp ? lp.value : 20, su = lu ? lu.value : 12;
+        
+        const lpT = document.getElementById('labelSizePaintedTxt'), luT = document.getElementById('labelSizeUnpaintedTxt');
+        if(lpT) lpT.textContent = sp;
+        if(luT) luT.textContent = su;
+        
+        const sul = document.getElementById('showUnpaintedLabels');
+        const showU = sul ? sul.checked : false;
+        
+        addLabelsForLayer(layer1, 'field1', sp, su, showU);
+    }
+
+    // Layer 2 Labels
+    const sl2 = document.getElementById('showL2Labels');
+    if(sl2 && sl2.checked) {
+        const lpL2 = document.getElementById('labelSizeL2');
+        const sL2 = lpL2 ? lpL2.value : 14;
+        
+        const l2Txt = document.getElementById('labelSizeL2Txt');
+        if(l2Txt) l2Txt.textContent = sL2;
+        
+        addLabelsForLayer(layer2, 'field2', sL2, sL2, false); 
+    }
+}
+
+function addLabelsForLayer(lyr, fid, sp, su, showU) {
+    if(!lyr) return;
+    const fel = document.getElementById(fid);
+    if(!fel) return;
+    const f = fel.value;
+    if(!f) return;
+    lyr.eachLayer(l => {
+        const isP = paintedFeatures.has(l._leaflet_id);
+        if(!isP && !showU) return;
+        const size = isP ? sp : su, name = l.feature.properties[f];
+        if(!name) return;
+        
+        const center = getBestCenter(l);
+        
+        const m = L.marker(center, {icon: L.divIcon({ className: 'area-lbl', html: `<div style="color:#fff; font-size:${size}px;">${name}</div>`, iconSize: [120, 24], iconAnchor: [60, 12] }), interactive: true, draggable: true}).addTo(map);
+        labelMarkers.set(Math.random(), m);
+    });
+}
+
+// ── CROP & EXPORT ──
+function initCropEvents() { 
+    const box = document.getElementById('crop-box'), hdr = document.getElementById('crop-hdr'); 
+    if(!box || !hdr) return;
+    let isD = false, isR = false, dir = '', sx, sy, sl, st, sw, sh; 
+    hdr.onmousedown = e => { isD = true; sx = e.clientX; sy = e.clientY; sl = box.offsetLeft; st = box.offsetTop; e.preventDefault(); }; 
+    document.querySelectorAll('.rh').forEach(h => { h.onmousedown = e => { isR = true; dir = h.dataset.dir; sx = e.clientX; sy = e.clientY; sw = box.offsetWidth; sh = box.offsetHeight; sl = box.offsetLeft; st = box.offsetTop; e.preventDefault(); e.stopPropagation(); }; }); 
+    document.onmousemove = e => { 
+        if(isD) { box.style.left = (sl + (e.clientX - sx)) + 'px'; box.style.top = (st + (e.clientY - sy)) + 'px'; } 
+        if(isR) { 
+            let dx = e.clientX - sx; 
+            let nw = Math.max(80, sw + (dir.includes('r') ? dx : -dx)); 
+            let nh = nw * (currentRatio.h / currentRatio.w); 
+            box.style.width = nw + 'px'; box.style.height = nh + 'px'; 
+            if(dir.includes('l')) box.style.left = (sl + (sw - nw)) + 'px'; 
+            if(dir.includes('t')) box.style.top = (st + (sh - nh)) + 'px'; 
+        } 
+        updateCropLabel(); 
+    }; 
+    document.onmouseup = () => { isD = isR = false; }; 
+}
+
+function updateCropLabel() { 
+    const box = document.getElementById('crop-box'), sEl = document.getElementById('exportScale'); 
+    if(!box || !sEl) return;
+    const s = sEl.value;
+    let w, h; 
+    if(s === 'hd') { w = 1920; h = 1080; } 
+    else if(s === '4k') { w = 3840; h = 2160; } 
+    else { const sv = parseInt(s); w = Math.round(box.offsetWidth * sv); h = Math.round(box.offsetHeight * sv); } 
+    const dims = document.getElementById('crop-dims');
+    if(dims) dims.textContent = `${w} x ${h} px (${s})`; 
+}
+
+function setCropRatio(w, h) { 
+    currentRatio = { w, h }; 
+    const box = document.getElementById('crop-box'); 
+    if(box) { box.style.width = '480px'; box.style.height = (480 * (h/w)) + 'px'; }
+    updateCropLabel(); 
+}
+
+function toggleCrop() { 
+    const b = document.getElementById('crop-box'); 
+    if(!b) return;
+    const show = b.style.display === 'none' || !b.style.display; 
+    b.style.display = show ? 'block' : 'none'; 
+    const ctrl = document.getElementById('export-controls');
+    if(ctrl) ctrl.style.display = show ? 'block' : 'none'; 
+    updateCropLabel(); 
+}
+
+function flattenTransforms() {
+    const transformElements = document.querySelectorAll('.leaflet-pane, .leaflet-marker-icon, .leaflet-shadow-icon, .leaflet-tooltip');
+    const originalStyles = [];
+    transformElements.forEach(el => {
+        if (!el || !el.style) return;
+        const transform = el.style.transform;
+        if (transform) {
+            originalStyles.push({ el, transform, left: el.style.left, top: el.style.top });
+            const match3d = transform.match(/translate3d\(([^,]+),\s*([^,]+),\s*([^)]+)\)/i);
+            const match2d = transform.match(/translate\(([^,]+),\s*([^)]+)\)/i);
+            let x = '0px', y = '0px';
+            if (match3d) { x = match3d[1]; y = match3d[2]; }
+            else if (match2d) { x = match2d[1]; y = match2d[2]; }
+            if (x !== '0px' || y !== '0px') {
+                el.style.left = `calc(${el.style.left || '0px'} + ${x})`;
+                el.style.top = `calc(${el.style.top || '0px'} + ${y})`;
+                el.style.transform = 'none';
+            }
+        }
+    });
+    return originalStyles;
+}
+
+function restoreTransforms(originalStyles) {
+    originalStyles.forEach(s => {
+        if (s && s.el && s.el.style) {
+            s.el.style.transform = s.transform;
+            s.el.style.left = s.left;
+            s.el.style.top = s.top;
+        }
+    });
+}
+
+// ── HTML TO IMAGE PNG EXPORT (FIXED FOR FX) ──
+async function exportImage() {
+    const box = document.getElementById('crop-box');
+    if (!box) return alert("Error: ไม่พบกรอบ Crop Box");
+
+    const rect = box.getBoundingClientRect();
+    const mapEl = document.getElementById('map');
+    const mapRect = mapEl.getBoundingClientRect();
+    const scaleOpt = document.getElementById('exportScale').value;
+    const exportBtn = document.getElementById('exportBtn');
+    
+    if (exportBtn) { exportBtn.disabled = true; exportBtn.innerText = '⏳ สร้าง PNG...'; }
+
+    let targetW = 1920, targetH = 1080;
+    if(scaleOpt === '4k') { targetW = 3840; targetH = 2160; }
+    else if(scaleOpt !== 'hd') { const s = parseInt(scaleOpt) || 2; targetW = Math.round(rect.width * s); targetH = Math.round(rect.height * s); }
+
+    box.style.display = 'none';
+    const originalStyles = flattenTransforms();
+    await new Promise(r => setTimeout(r, 200));
+
+    try {
+        const globalFillEl = document.getElementById('globalFill');
+        const bgColor = globalFillEl ? globalFillEl.value : '#161b22';
+        
+        const pixelRatio = targetW / rect.width;
+        const dataUrl = await htmlToImage.toPng(mapEl, {
+            pixelRatio: pixelRatio,
+            backgroundColor: bgColor,
+            style: { pointerEvents: 'none' }
+        });
+        
+        const img = new Image();
+        img.src = dataUrl;
+        await new Promise((resolve, reject) => { 
+            img.onload = resolve; 
+            img.onerror = () => reject(new Error("Image loaded error")); 
+        });
+
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        
+        const sx = (rect.left - mapRect.left) * pixelRatio;
+        const sy = (rect.top - mapRect.top) * pixelRatio;
+        const sw = rect.width * pixelRatio;
+        const sh = rect.height * pixelRatio;
+        
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, targetW, targetH);
+        
+        const link = document.createElement('a');
+        link.download = `Map_Studio_v9_10-${targetW}x${targetH}.png`;
+        link.href = canvas.toDataURL('image/png', 1.0);
+        link.click();
+        
+    } catch(e) { 
+        console.error(e);
+        alert("Export Error: " + e.message); 
+    } finally {
+        restoreTransforms(originalStyles);
+        if (box) box.style.display = 'block';
+        if (exportBtn) { exportBtn.disabled = false; exportBtn.innerText = '⬇️ บันทึก PNG'; }
+    }
+}
+
+// ── HTML TO IMAGE SVG EXPORT (FIXED FOR FX) ──
+async function exportSVG() {
+    const box = document.getElementById('crop-box');
+    if (!box) return alert("Error: ไม่พบกรอบ Crop Box");
+    
+    const rect = box.getBoundingClientRect();
+    const mapEl = document.getElementById('map');
+    const mapRect = mapEl.getBoundingClientRect();
+    const exportBtnSvg = document.getElementById('exportBtnSvg');
+    
+    if (exportBtnSvg) { exportBtnSvg.disabled = true; exportBtnSvg.innerText = '⏳ สร้าง SVG...'; }
+
+    const scaleOpt = document.getElementById('exportScale').value;
+    let targetW = 1920, targetH = 1080;
+    if(scaleOpt === '4k') { targetW = 3840; targetH = 2160; }
+    else if(scaleOpt !== 'hd') { const s = parseInt(scaleOpt) || 2; targetW = Math.round(rect.width * s); targetH = Math.round(rect.height * s); }
+
+    box.style.display = 'none';
+    const originalStyles = flattenTransforms();
+    await new Promise(r => setTimeout(r, 200));
+
+    try {
+        const globalFillEl = document.getElementById('globalFill');
+        const bgColor = globalFillEl ? globalFillEl.value : '#161b22';
+
+        const svgPane = document.querySelector('.leaflet-overlay-pane svg');
+        const origDisplay = svgPane ? svgPane.style.display : '';
+        if (svgPane) svgPane.style.display = 'none';
+
+        const pixelRatio = targetW / rect.width;
+        const dataUrl = await htmlToImage.toPng(mapEl, {
+            pixelRatio: pixelRatio,
+            backgroundColor: bgColor,
+            style: { pointerEvents: 'none' }
+        });
+        
+        const img = new Image();
+        img.src = dataUrl;
+        await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        const sx = (rect.left - mapRect.left) * pixelRatio;
+        const sy = (rect.top - mapRect.top) * pixelRatio;
+        const sw = rect.width * pixelRatio;
+        const sh = rect.height * pixelRatio;
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, targetW, targetH);
+        const bgDataUrl = canvas.toDataURL('image/png', 1.0);
+
+        if (svgPane) svgPane.style.display = origDisplay;
+
+        const xOffset = rect.left - mapRect.left;
+        const yOffset = rect.top - mapRect.top;
+        
+        let vectorGroup = '';
+        if (svgPane) {
+            const overlayContainer = document.querySelector('.leaflet-overlay-pane');
+            let tx = parseFloat(overlayContainer?.style.left || 0);
+            let ty = parseFloat(overlayContainer?.style.top || 0);
+            
+            let rawSvg = svgPane.outerHTML.replace('xmlns="http://www.w3.org/2000/svg"', '');
+            vectorGroup = `<g transform="translate(${tx}, ${ty})">${rawSvg}</g>`;
+        }
+
+        const fxStyle = document.getElementById('dynamic-fx')?.innerHTML || '';
+
+        const finalSvg = `<?xml version="1.0" encoding="utf-8"?>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="${xOffset} ${yOffset} ${rect.width} ${rect.height}" width="${targetW}" height="${targetH}">
+            <defs><style>${fxStyle}</style></defs>
+            <image href="${bgDataUrl}" x="${xOffset}" y="${yOffset}" width="${rect.width}" height="${rect.height}" />
+            ${vectorGroup}
+        </svg>`;
+
+        const blob = new Blob([finalSvg], {type: 'image/svg+xml;charset=utf-8'});
+        const link = document.createElement('a');
+        link.download = `Map_Studio_v9_10-${targetW}x${targetH}.svg`;
+        link.href = URL.createObjectURL(blob);
+        link.click();
+        URL.revokeObjectURL(link.href);
+        
+    } catch(e) { 
+        console.error(e);
+        alert("SVG Export Error: " + e.message); 
+    } finally {
+        restoreTransforms(originalStyles);
+        if (box) box.style.display = 'block';
+        if (exportBtnSvg) { exportBtnSvg.disabled = false; exportBtnSvg.innerText = '⬇️ บันทึก SVG'; }
+    }
+}
+
+// ── UTILITIES & HISTORY ──
+function togglePanel(h) { 
+    if(!h) return;
+    
+    if (isPinArmed) {
+        isPinArmed = false;
+        pinShape = null;
+        document.querySelectorAll('.shape-btn').forEach(b => b.classList.remove('sel'));
+        if (annStep === 1 && tempPinMarker) {
+            annLayer.removeLayer(tempPinMarker);
+            tempPinMarker = null;
+            annStep = 0;
+        }
+    }
+    
+    h.classList.toggle('open'); 
+    if(h.nextElementSibling) h.nextElementSibling.classList.toggle('open'); 
+}
+
+function undoAction() {
+    if (annStep === 1) {
+        if (tempPinMarker) annLayer.removeLayer(tempPinMarker);
+        tempPinMarker = null;
+        annStep = 0;
+        isPinArmed = false;
+        document.querySelectorAll('.shape-btn').forEach(b => b.classList.remove('sel')); 
+        return;
+    }
+
+    if (actionHistory.length === 0) return;
+    const last = actionHistory.pop();
+
+    if (last.type === 'paint') {
+        if (last.old) {
+            paintedFeatures.set(last.id, last.old);
+            if(last.layer) {
+                last.layer.setStyle({fillColor: last.old.fill, fillOpacity: last.old.op, color: last.old.stroke, weight: last.old.weight});
+                applyClassToLayer(last.layer, last.old.className);
+            }
+        } else {
+            paintedFeatures.delete(last.id);
+            if(last.layer && last.layer.feature) {
+                if (layer2 && layer2.hasLayer(last.layer)) {
+                    const elF = document.getElementById('l2Fill'), elO = document.getElementById('l2FillOp'), elS = document.getElementById('l2Stroke'), elW = document.getElementById('l2StrokeW');
+                    const fv = elF ? elF.value : '#bc8cff', ov = elO ? (elO.value / 100) : 0.15, sv = elS ? elS.value : '#bc8cff', wv = elW ? parseFloat(elW.value) : 1.5;
+                    last.layer.setStyle({ fillColor: fv, fillOpacity: ov, color: sv, weight: wv });
+                } else {
+                    last.layer.setStyle(getFeatureStyle(last.layer.feature));
+                }
+                applyClassToLayer(last.layer, null);
+            }
+        }
+        refreshAllLabels();
+    } else if (last.type === 'annotate') {
+        if (last.obj.line && annLayer.hasLayer(last.obj.line)) annLayer.removeLayer(last.obj.line);
+        if (last.obj.dot && annLayer.hasLayer(last.obj.dot)) annLayer.removeLayer(last.obj.dot);
+        if (last.obj.label && annLayer.hasLayer(last.obj.label)) annLayer.removeLayer(last.obj.label);
+        if (selectedAnnMarker === last.obj.label) closeEditAnn();
+        removeAnnotationData(last.obj);
+    }
+}
+
+function clearAnnotations() { 
+    if(confirm('ต้องการล้างป้ายและหมุดที่ปักไว้ทั้งหมดหรือไม่?')) { 
+        annLayer.clearLayers(); 
+        closeEditAnn();
+        allAnnotations = [];
+        actionHistory = actionHistory.filter(h => h.type !== 'annotate');
+    } 
+}
+
+function resetAll() { 
+    if(confirm('ต้องการล้างข้อมูลการระบายสีและปักหมุดทั้งหมดหรือไม่?')) { 
+        paintedFeatures.clear(); 
+        actionHistory = [];
+        allAnnotations = [];
+        if(layer1) {
+            layer1.setStyle(getFeatureStyle); 
+            layer1.eachLayer(l => applyClassToLayer(l, null));
+        }
+        if(layer2) {
+            layer2.eachLayer(l => {
+                const elF = document.getElementById('l2Fill'), elO = document.getElementById('l2FillOp'), elS = document.getElementById('l2Stroke'), elW = document.getElementById('l2StrokeW');
+                const fv = elF ? elF.value : '#bc8cff', ov = elO ? (elO.value / 100) : 0.15, sv = elS ? elS.value : '#bc8cff', wv = elW ? parseFloat(elW.value) : 1.5;
+                l.setStyle({ fillColor: fv, fillOpacity: ov, color: sv, weight: wv });
+                applyClassToLayer(l, null);
+            });
+        }
+        if(annLayer) annLayer.clearLayers(); 
+        refreshAllLabels();
+        closeEditAnn();
+    } 
+}
+
+window.onload = initMap;
+</script>
+</body>
+</html>
